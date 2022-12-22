@@ -1,0 +1,3 @@
+[submodule "WordFrequencyPython"]
+	path = WordFrequencyPython
+	url = https://github.com/thinkelastic/WordFrequencyPython.git
