@@ -252,29 +252,32 @@ def main():
     if not os.path.exists(CACHE_DIRECTORY):
         # Create a new directory because it does not exist
         os.makedirs(CACHE_DIRECTORY)
+    
+    words = []
+    with  open(WORDS_PATH, 'r') as words_file:    
+        words.extend(json.load(words_file).items())
+    
+    print ("Found %d words" % len(words))
+    
+    for packageIndex in range(0, len(words), 100):
+        output_path = 'Clozecards_%d-%d.apkg' % (packageIndex, packageIndex + 99)
         
-    words = list(json.load(open(WORDS_PATH)).items())
-    
-    deck = genanki.Deck(
-        random.randrange(1 << 30, 1 << 31),
-        'Vocabulary Flashcards')
-    package = genanki.Package(deck)
-    
-    #generate_flashcards(words, deck, package)
-    #package.write_to_file('flashcards.apkg')
-
-    deck = genanki.Deck(
-        random.randrange(1 << 30, 1 << 31),
-        'Vocabulary Clozecards 1-100')
-   
-    package = genanki.Package(deck)
-    selection = words[0:100]
-    
-    generate_clozecards(selection, deck, package)
-    generate_clozecards(selection, deck, package)
-    generate_clozecards(selection, deck, package)
-    
-    package.write_to_file('clozecards.apkg')        
+        if os.path.exists(output_path):
+            continue
+        
+        deck = genanki.Deck(
+            random.randrange(1 << 30, 1 << 31),
+            'Vocabulary Clozecards %d-%d' % (packageIndex, packageIndex + 100))
+       
+        package = genanki.Package(deck)
+        selection = words[packageIndex:packageIndex + 100]
+        
+        generate_flashcards(selection, deck, package)
+        generate_flashcards(selection, deck, package)
+        generate_flashcards(selection, deck, package)
+        
+        package.write_to_file(output_path)
+       
 
 if __name__ == '__main__':
     main()
