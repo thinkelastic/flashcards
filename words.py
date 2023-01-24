@@ -7,9 +7,11 @@ import random
 import string
 import html
 import collections
+import genxword.control
 
 openai.api_key = os.getenv("OPENAI_API_KEY")
 
+PACKAGE_SIZE = 50
 OXFORD_APP_ID = os.getenv("OXFORD_APP_ID")
 OXFORD_APP_KEY = os.getenv("OXFORD_APP_KEY")
 
@@ -21,13 +23,17 @@ OXFORD_WORD_URL = string.Template(
 OXFORD_LEMMA_URL = string.Template(
     "https://od-api.oxforddictionaries.com/api/v2/lemmas/${locale}/${word}")
 
-ENABLE_STORY_CACHE = True
+ENABLE_CACHE = True
 STORY_PROMPT = string.Template('''Write 3 sentences using the word ${word}''')
+CLUE_PROMPT = string.Template('''Generate a crossword clue for "${word}"''')
 
 WORDS_PATH = 'WordFrequencyPython/json/words.json'
-AUDIO_DIRECTORY = os.path.join('media', DEFAULT_LOCALE)
 CACHE_DIRECTORY = os.path.join('cache', DEFAULT_LOCALE)
-
+AUDIO_DIRECTORY = os.path.join(CACHE_DIRECTORY, 'media')
+DICTIONARY_DIRECTORY = os.path.join(CACHE_DIRECTORY, 'dictionary')
+STORY_DIRECTORY = os.path.join(CACHE_DIRECTORY, 'story')
+CLUE_DIRECTORY = os.path.join(CACHE_DIRECTORY, 'clue')
+FLASHCARD_DIRECTORY = os.path.join('output', DEFAULT_LOCALE)
 
 FRONTSIDE_CLOZECARD = '''<font size="5px">{{Synonym}}</font>
 <hr>
@@ -100,7 +106,7 @@ def lookup_lemma(word):
         return response
 
 def lookup_word(word):
-    word_cache = os.path.join(CACHE_DIRECTORY, "%s.json" % word)
+    word_cache = os.path.join(DICTIONARY_DIRECTORY, "%s.json" % word)
     dictionary_entry = None
     
     if os.path.exists(word_cache):
@@ -128,19 +134,49 @@ def lookup_word(word):
         
     return dictionary_entry
 
+def generate_clue(word, salt = 0):
+    clue_cache_dir = os.path.join(CLUE_DIRECTORY, str(salt))
+    clue_cache = os.path.join(clue_cache_dir, "%s.json" % word)
+    
+    if not os.path.exists(clue_cache_dir):
+        os.makedirs(clue_cache_dir)
+
+    clue = None
+
+    if ENABLE_CACHE and os.path.exists(clue_cache):
+        with open(clue_cache) as file:
+            clue = json.load(file)
+    else:
+        print("Calling OAI to generate clue for %s" % word)
+        clue = openai.Completion.create(
+            model="text-davinci-003",
+            prompt=CLUE_PROMPT.safe_substitute({'word': word}),
+            temperature=0.6,
+            max_tokens=256,
+            top_p=1,
+            frequency_penalty=1,
+            presence_penalty=1
+        )
+        
+        with open(clue_cache, 'w') as file:
+            json.dump(clue, file)
+    
+    return clue
+
 def generate_story(word, meanings, salt = 0):
-    story_cache_dir = os.path.join(CACHE_DIRECTORY, "story", str(salt))
+    story_cache_dir = os.path.join(STORY_DIRECTORY, str(salt))
     story_cache = os.path.join(story_cache_dir, "%s.json" % word)
     
     if not os.path.exists(story_cache_dir):
         os.makedirs(story_cache_dir)
 
     story = None
-    
-    if ENABLE_STORY_CACHE and os.path.exists(story_cache):
+
+    if ENABLE_CACHE and os.path.exists(story_cache):
         with open(story_cache) as file:
             story = json.load(file)
     else:
+        print("Calling OAI to generate story for %s" % word)
         story = openai.Completion.create(
             model="text-davinci-003",
             prompt=STORY_PROMPT.safe_substitute({'word': word, 'definition': meanings}),
@@ -155,7 +191,8 @@ def generate_story(word, meanings, salt = 0):
             json.dump(story, file)
     
     return story
-                                        
+
+                                       
 def create_card_details(word, meanings, salt = 0):
     dictionary_entry = lookup_word(word)
     story = generate_story(word, meanings, salt)
@@ -239,7 +276,21 @@ def generate_clozecards(words, deck, package, salt):
         
         if card.pronounced_word and os.path.exists(card.pronounced_word):
             package.media_files.append(card.pronounced_word)
+
+def generate_crossword(words, output_path, salt=0):
+    gen = genxword.control.Genxword(auto=True, mixmode=False)
     
+    wordlist = []
+    for key, value in words:
+        print("Processing '%s'" % key)
+        clue = generate_clue(key, salt)
+        word = key + " " + clue['choices'][0]['text'].strip().replace('"', '')
+        wordlist.append(word)
+        
+    gen.wlist(wordlist)
+    gen.grid_size()
+    gen.gengrid(output_path + " (" + str(salt) + ")", saveformat="p")
+        
 def main():
     words = []
     with  open(WORDS_PATH, 'r') as words_file:    
@@ -247,25 +298,31 @@ def main():
     
     print ("Found %d words" % len(words))
     
-    for packageIndex in range(0, len(words), 100):
-        print("Generating package %d-%d" % (packageIndex, packageIndex + 99))
-        output_path = 'Clozecards_%d-%d.apkg' % (packageIndex, packageIndex + 99)
+    for packageIndex in range(0, len(words), PACKAGE_SIZE):
+        if (packageIndex > PACKAGE_SIZE * 3):
+            break
         
-        if os.path.exists(output_path):
-            continue
+        anki_package = "Vocabulary_%d-%d.apkg" % (packageIndex, packageIndex + PACKAGE_SIZE - 1)
+        crossword = 'Crossword %d-%d' % (packageIndex, packageIndex + PACKAGE_SIZE - 1)
+        flashcard_path = os.path.join(FLASHCARD_DIRECTORY, anki_package)
+        crossword_path = os.path.join(FLASHCARD_DIRECTORY, crossword)
         
-        deck = genanki.Deck(
-            random.randrange(1 << 30, 1 << 31),
-            'Vocabulary Clozecards %d-%d' % (packageIndex, packageIndex + 100))
-       
-        package = genanki.Package(deck)
-        selection = words[packageIndex:packageIndex + 100]
+        print("Generating package %d-%d" % (packageIndex, packageIndex + PACKAGE_SIZE -1))
+
         
-        generate_clozecards(selection, deck, package, 1)
-        generate_clozecards(selection, deck, package, 2)
-        generate_clozecards(selection, deck, package, 3)
+        selection = words[packageIndex:packageIndex + PACKAGE_SIZE - 1]
+            
+        if not os.path.exists(flashcard_path):
+            deck = genanki.Deck(random.randrange(1 << 30, 1 << 31), anki_package)
+            package = genanki.Package(deck)
+            
+            generate_clozecards(selection, deck, package, 1)
+            package.write_to_file(flashcard_path)
         
-        package.write_to_file(output_path)
+        if not os.path.exists(crossword_path):
+            generate_crossword(selection, crossword_path, 0)
+            generate_crossword(selection, crossword_path, 1)
+            
        
 
 if __name__ == '__main__':
