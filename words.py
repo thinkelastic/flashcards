@@ -280,6 +280,8 @@ def generate_clozecards(words, deck, package, salt):
 def generate_crossword(words, output_path, salt=0):
     gen = genxword.control.Genxword(auto=True, mixmode=False)
     
+    random.shuffle(words)
+    
     wordlist = []
     for key, value in words:
         print("Processing '%s'" % key)
